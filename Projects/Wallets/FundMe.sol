@@ -7,21 +7,36 @@
 
 
 pragma solidity 0.8.8; 
+import "./PriceConverter.sol";
 
-import "@chainlink/contracts/src/v0.8/interfaces/AggregatorV3Interface.sol";
+error NotOwner();
 
 contract FundMe {
 
-    uint256 public minimumUSD = 50 * 1e18;
+    using PriceConverter for uint256;
+    
+    // 21,415 gas - constant 
+    // 23,515 gas - non-constant 
+
+    uint256 public constant MINIMUM_USD = 50 * 1e18;
     address[] public funders;
     mapping (address=> uint256) public adressToAmountFunded; // mapping of how much money is being send by individual address 
+     
+     address public immutable i_owner;
+     // 21,508 gas - immutable
+     // 23,644 gas - non-immutable
+    
+     constructor() {
+       i_owner = msg.sender;
+      }
+
 
     function fund() public payable{
 
         //  want to be able to set a minimum fund amount in USD
         //  How do we send ETH to this contract?
 
-        require(getConversionRate(msg.value)>= 1e18, "Didn't send enough Ether"); // 1e18 == 1 *10 ** 18 = 1000000000000000000
+        require(msg.value.getConversionRate()>= 1e18, "Didn't send enough Ether"); // 1e18 == 1 *10 ** 18 = 1000000000000000000
          
          // revertings: undo any action before, and sends remaining gas back 
         
@@ -30,7 +45,7 @@ contract FundMe {
 
         //msg.sender: sender of the message
         //msg.value : number of wei sent with the message
-        
+
 
 
         funders.push(msg.sender);
@@ -38,30 +53,65 @@ contract FundMe {
 
     }
 
-    function getPrice() public view returns(uint256) {
-        // ABI
-        // Adress 0xD4a33860578De61DBAbDc8BFdb98FD742fA7028e
-        // Chainlink docs for price Feed: https://docs.chain.link/data-feeds/price-feeds
+    function withdraw() public onlyOwner {
+        
+        //for loop
 
-        AggregatorV3Interface priceFeed= AggregatorV3Interface(0xD4a33860578De61DBAbDc8BFdb98FD742fA7028e);
-        (,int256 price,,,)=priceFeed.latestRoundData();
+         //for( starting index, ending index, step amount )
+         //        0                10                2    (0 TO 10 WITH 2 EACH TIME)
+            for(uint256 funderIndex = 0; funderIndex< funders.length; funderIndex= funderIndex +1) {
+                 address funder = funders[funderIndex];
+                 adressToAmountFunded[funder] = 0;
+            }
 
-        //msg.sender returns 18 decimals while price returns 8 so to make it same decimals 
-        //Eth in terms of USD: 1200.00000000
-        //msg.value is in uint256 but price is in int256, coversion can be done by type-casting:- uint256(price*1e10);
-         return uint256(price * 1e10); // 1**10 == 10000000000
+            // reset array 
+
+            funders = new address[](0); //brand new address with zero elements
+         // withdraw the funds 
+
+         /* transfer:
+          msg.sender is of type address
+          payable(msg.sender) is of type payable address
+
+         code: payable(msg.sender.transfer(address(this).balance);
+
+         capped at 2300 gas, if more gas used throws error */
+
+         /* send
+          
+         code: bool sendSuccess= payable(msg.sender).send(address(this).balance);
+               require(sendSuccess, "Send Failed");
+
+
+         capped at 2300 gas, if more gas used returns a bool */
+
+         /*call
+
+         code: (bool callSuccess, bytes memory dataReturned)= payable(msg.sender).call{value: address(this).balance("");
+                require(callSuccess, "call failed");
+
+         doesn't have capped gas or set gas, return bool */        
 
 
     }
 
+    modifier onlyOwner {
+        //require(msg.sender == i_owner, "sender is not owner");
+        if(msg.sender != i_owner)  { revert NotOwner(); }
+        _;
+    }
+    // what happens if someone sends eth to this contract without calling the fund 
 
-    function getConversionRate(uint256 ethAmount) public view returns (uint256) {
-        uint256 ethprice = getPrice();
-        // Eth price = 1200 with additonal 18 zeros
-        // example 1Eth sending to contract: 1 with additonal 18zeros 
-        uint256 ethAmountInUsd = (ethprice * ethAmount) / 1e18;
-        return ethAmountInUsd;
+    // receive () 
+    // fallback ()
+
+    receive() external payable {
+        fund();
+
     }
 
-    
+    fallback() external payable {
+        fund ();
+    } 
+
 }
